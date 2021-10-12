@@ -1,0 +1,398 @@
+---
+title: Not Another Iris Dataset A novice approach to Machine Learning in the context
+  of RNA Biology
+output:
+  word_document: default
+  html_document: null
+theme: lumen
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+# Introduction
+
+The R programming environment offers multiple packages for implementation of machine learning mechanisms. Notably the `caret` package, short for Classification And Regression Training, provides a set of tools for broad variety of machine learning algorithms. This article follows my attempt to utilize these tools as I take my first steps into the machine learning realm. To take a step beyond the plug-and-chug guides provided in the package vignettes, I have stepped away from the Iris dataset and instead focused my work on the biological concept of RNA subcellular localization. As I didn't have any truly novel or significant results in the outcome of my work, I chose not to format my report in the form of a journal-ready paper. Instead this article will cover my analyses in a work-flow format, as I think the work is more suitable as blog-style article.
+
+This article covers the biological background to RNA subcellular localization and the research already completed on the subject. It then covers the analyses I completed on an independent dataset. The article maintains a balance of code blocks of implementation and the theory behind each step of the process, as well as any relevant results.
+
+# Biological Background
+
+RNA is a molecular chain of nucleic acids that are a key component to the central dogma of molecular biology. RNA transcripts are generated from a DNA template and have a wide variety of biological function, ranging from acting as the template for protein synthesis (mRNA) to have direct functional roles in cellular pathway regulation.
+
+As mentioned, the subset of RNA known as messenger RNA (mRNA), acts as the template for protein creation. The intracellular environment is a dynamic space, with a fluctuating molecular landscape across both the temporal and spatial dimensions. Since mRNA is the direct precursor to protein development, it is a primary component in regulating protein expression both temporally and spatially. When and where a mRNA transcript is expressed, is associated with when and where the corresponding protein will be expressed. [@Zhang2021] With the advent of nucleic acid sequencing technologies, a significant research effort was made to discover the role of mRNA expression levels in cellular function. Along with advances in nucleic sequencing technologies, the ability to specificity to which cells can be probed has also increase, allowing illumination of both when/what mRNA transcripts are being expressed and where in the cell the mRNA transcripts are expressed.
+
+Sub-localization of mRNA transcripts plays several important functions in protein expression. It helps build a protein repository at a specific site rather than transporting proteins around the cell. The compartmentalization of protein building also allows for the development of protein gradients within the cell and it provides protection from proteins reacting ectopically [@Garg2020]. The main mechanism through which mRNA localization is controlled is through direct transport by the cytoskeletal network. This mechanism involves use of *trans*-acting RBPs and *cis*-acting "zipcode" regions on the the mRNA molecule. The "zipcode" region is a mRNA sequence motif that can be identified and bound by a complimentary binding site [@Wang2021].
+
+Researching mRNA localization has several functional uses, including providing support to better understanding differential protein expression within the cell and cellular phenotypes, as well as having clinical relevance as interrupted regulation of mRNA localization can lead to disease. Understanding the mechanism to the mRNA localization can provide a pharmaceutical target for treatment [@Zhang2021]. For example mutations in genes involved in mRNA localization at the synapse have been linked to several human neurologic diseases, including Fragile X syndrome [@Wang2021]
+
+This analyses focuses on the mRNA subcellular localization, with the goal of developing a machine learning model that will identify if a mRNA transcript will be found in the exosomal subcellular compartment. The exosomal region can be defined as the extracellular space. Several tools already exist to handle this problem, and the most recent of these tools have exceptional performance in performing this analyses. Most of these tools can perform multi-location classification, so my analyses is significantly scaled down in comparison.
+
+Paragraph about tool [....]
+
+# Workflow
+
+The objective in this project was to use machine learning analyses to predict if a mRNA will be localized to the exosomal region. The main steps in my workflow include data collection, data cleaning, data preparation and data analyses. The steps are described in further detail below.
+
+## Data Collection
+
+The first step in analyses was to obtain data to analyze. As referenced by the title, I wanted to move forward from the generally used "Iris" dataset that is commonly used in for introductory machine learning analysis. mRNA transcript data and nucleic acid sequencing data typically comes in the form of fasta files. Transcipt data can be found on sites such as the Gene Omnibus, which hosts sequencing data for published research in the field. The website is <https://www.ncbi.nlm.nih.gov/geo/.> To gather specific mRNA localization information the database RNALocate ([http://www.rna-society.org/rnalocate/)](http://www.rna-society.org/rnalocate/)) was used. RNALocate is a database with a primary goal of documenting the RNA-localization information provided by experimental and predicted results.
+
+I chose to collect a pre-curated dataset provided by the developers of the mRNAloc tool. This dataset can be found here <http://proteininformatics.org/mkumar/mrnaloc/download.html,> I chose the Training and Independent dataset which contains the following distribution:
+
+-   cytoplasm 6964
+
+-   endoplasmic reticulum 1998
+
+-   extracellular region 1131
+
+-   mitochondria 442
+
+-   nucleus 6346
+
+    -   my nucleus transcripts were reduced from the original dataset to the size 200, due to uploading issues.
+
+### Load Packages
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(plyr)
+library(dplyr)
+library(rDNAse)
+library(caret)
+library(AppliedPredictiveModeling)
+library(pROC)
+```
+
+### Upload files
+
+```{r}
+# create list of files I want to upload, in this case only the files from the mRNAloc training datset
+namelist = list.files("~/Dropbox/bioinfo_proj/Training_and_Independent_Dataset/", pattern = "train.fast",full.names = T)
+
+#rDNAse function, readFast to read mRNA files into R as a list
+RNAF = lapply(namelist, readFASTA)
+class(RNAF)
+
+# create a function that creates a sringle dataframe from the list of FASTA sequences
+dframer= function(rnaList,nameList){
+  rnaDF= data.frame()
+  for(i in 1:length(rnaList)) { 
+    temp=as.data.frame(unlist(rnaList[[i]]))
+    locname=unlist(strsplit(strsplit(namelist,"/")[[i]][8],"_"))[1]
+    temp$loc=c(rep(locname,length(temp)))
+    
+    if(i==1){
+      rnaDF=temp
+    }
+    else {
+    rnaDF=rbind(rnaDF,temp)
+    }
+  }
+  colnames(rnaDF)[1]='seq' 
+  return(rnaDF)
+}
+
+rna=dframer(rnaList = RNAF, nameList = namelist)
+nrow(rna)
+summary(rna)
+bplot_loc=table(rna$loc)
+```
+
+The output dataset has the following characteristics:
+
+-   12410 observations, each observation named for as a mRNA identifier
+
+-   Two variables
+
+    -   seq (the mRNA sequence as a charaacter string)
+
+    -   loc (contains the location from the RNAlocate database from which the mRNA is located)
+
+        -   contains 5 variable levels, one for each location
+
+-   frequencies of mRNA locations obtained
+
+    -   cytoplasm 5310
+    -   endoplasmic 1185
+    -   extracellular 710
+    -   mitocondria 350
+
+```{r}
+barplot(bplot_loc, col = c("grey","grey","light blue","grey","grey"))
+```
+
+## Data Preparation
+
+Once the data was uploaded to a R dataframe it was then prepared for analyses. The two components that each observation contains are the RNA sequence and a location label. To make use of this information as applied to the goal set forth in this analysis, the objective is to use only the mRNA sequence to infer what location label it is assigned. Or put another way, does the mRNA sequence contain the information that can be detected and used to determine where the mRNA will be localized. The objective is then to create a feature vector from the mRNA sequence, and use that feature vecture in the machine learning application
+
+There are many different approaches that researchers can take to encode a nucleic acide sequence as a feature vector. Depending on the type of machine learning to be used, different feature encoding methods can be selected. I chose to use a encoding method Pseudo k-tupler composition algorithm, provided by the rDNAse package. More information can be found on the package and algorithms here \<<https://github.com/wind22zhu/rDNAs>e\>, but the quick overview of the method is as follows. Psuedo k-tupler composition is a nucleic acid encoding method that utilizes both the local sequence-order information and the global sequence-order effects to encode the nucleic acid sequence as a feature vector. This method allows for a vector of $$4^k$$ features plus additional features, where $$k$$ is the selected size of the k-mer. In my analyses a k-mer of $$k=3$$ was use .
+
+```{r echo=FALSE}
+# # Extracellular
+# temp=rna[rna$loc == "Extracellular",]
+# tempname=rownames(rna[rna$loc=="Extracellular",])
+# exo_featRNA=lapply(temp$seq,extrPseKNC)
+# exo_tempRNAdf = t(as.data.frame(exo_featRNA))
+# rownames(exo_tempRNAdf)=tempname
+# View(exo_tempRNAdf)
+# exo_rnaFDF=merge(temp,exo_tempRNAdf, by=0, all=TRUE)
+# summary(exo_rnaFDF)
+# View(exo_rnaFDF)
+# 
+# #Cytoplasm
+# temp=rna[rna$loc == "Cytoplasm",]
+# nrow(temp)
+# tempname=rownames(rna[rna$loc=="Cytoplasm",])
+# featRNA=lapply(temp$seq,extrPseKNC)
+# cyto_tempRNAdf = t(as.data.frame(featRNA))
+# rownames(cyto_tempRNAdf)=tempname
+# cyto_rnaFDF=merge(temp,cyto_tempRNAdf, by="row.names", all=TRUE)
+# summary( cyto_rnaFDF)
+# 
+# # Endoplasmic
+# temp=rna[rna$loc == "Endoplasmic",]
+# tempname=rownames(rna[rna$loc=="Endoplasmic",])
+# endo_featRNA=lapply(temp$seq,extrPseKNC)
+# endo_tempRNAdf = t(as.data.frame(endo_featRNA))
+# rownames(endo_tempRNAdf)=tempname
+# endo_rnaFDF=merge(temp,endo_tempRNAdf, by="row.names", all=TRUE)
+# summary(endo_rnaFDF)
+# 
+# 
+# #Mitochondria
+# temp=rna[rna$loc == "Mitochondria",]
+# nrow(temp)
+# tempname=rownames(rna[rna$loc=="Mitochondria",])
+# mito_featRNA=lapply(temp$seq,extrPseKNC)
+# mito_tempRNAdf = t(as.data.frame(mito_featRNA))
+# rownames(mito_tempRNAdf)=tempname
+# mito_rnaFDF=merge(temp,mito_tempRNAdf, by="row.names", all=TRUE)
+# summary(mito_rnaFDF)
+# 
+# 
+# #Nucleus
+# temp=rna[rna$loc == "Nucleus",][1:200,]
+# nrow(temp)
+# tempname=rownames(rna[rna$loc=="Nucleus",][1:200,])
+# nuc_featRNA=lapply(temp$seq,extrPseKNC)
+# nuc_featRNA=c(nuc_featRNA, lapply(temp$seq,extrPseKNC))
+# length(nuc_featRNA)
+# nuc_tempRNAdf = t(as.data.frame(nuc_featRNA))
+# rownames(nuc_tempRNAdf)=tempname
+# nuc_rnaFDF=merge(temp,nuc_tempRNAdf, by="row.names", all=TRUE)
+# summary(nuc_rnaFDF)
+# ### 200 nuclear RNA used instead, for simplicity…
+```
+
+The code above subsets each location group separately and then applies the PseudoKNC algorithm to the mRNA sequences. The code below then just binds the datasets together and saves as the object externally as a R datase.
+
+Note: the extrPseKNC method can take a fair amount of to complete, making it beneficial to save the output dataset as an external object. Note: the nuclear location group was downsized to 200 observations due to issues with the extrPseKNC method. If this project is further developed in the future it would be beneficial to work out this issue.
+
+before moving onto analysis, it is worth taking a moment to review the created dataset. The dataset is 7755 observations with the variables for a mRNA ID, mRNA sequence, location label and 65 variables encoding the feature vector of the mRNA sequence.
+
+```{r}
+rna_DF = readRDS("./rna_DF")
+summary(rna_DF)
+```
+
+Above displays a summary of the variables included in the dataset. Below I have characterized the dataset in a few plots. Note: I did not include all of the variables within each Plot. I instead only displayed a handful for each plot to display a general idea of how the variables are distributed.
+
+### Plotting
+
+```{r}
+transparentTheme(trans = .4)
+featurePlot(x = rna_DF[,4:6], 
+            y = rna_DF$loc, 
+            plot = "pairs",
+            auto.key=list(columns=2))
+```
+
+#### Randomly selected variable Histograms
+
+```{r}
+featurePlot(x=rna_DF[,11:18],
+            y=rna_DF$loc,
+            plot="density",
+            
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            auto.key = list(columns = 2))
+
+```
+
+#### Boxplots Assortment of Boxplots
+
+```{r}
+featurePlot(x = rna_DF[, 40:50], 
+            y = rna_DF$loc, 
+            plot = "box", 
+            ## Pass in options to bwplot() 
+            scales = list(y = list(relation="free"),
+                          x = list(rot = 90)), 
+            0.1,
+            auto.key = list(columns = 2))
+```
+
+## Data Analysis
+
+One of the standard packages to perform machine learning in R is "caret". More information on the package can be found here <https://topepo.github.io/caret/>.
+
+\#Preprocess Before the analyses can be performed, the data needs to be normalized. This process can be completed with the "preProcess" method with the parameter "center". This manipulation helps bring consistency across the dataset, which helps reduce any unintended effects on the model.
+
+```{r}
+library(caret)
+rna_DF=readRDS("./rna_DF")
+rna_DF$loc=factor(rna_DF$loc)
+levels(rna_DF$loc)
+
+processCenter=preProcess(rna_DF, method = c("center"))
+n_rna_DF=predict(processCenter,rna_DF)
+```
+
+# Partition
+
+Next the data needs to be partitioned into a training and testing dataset. There are several ways this can be accomplished, and I chose to simply use a 70-30 split.
+
+```{r}
+set.seed(777) # set the random number seed for reproducibility 
+
+# get indices for 70% of the data set
+intrain <- createDataPartition(y =n_rna_DF$loc, p= 0.7)[[1]]
+
+# seperate test and training sets
+training <- n_rna_DF[intrain,]
+testing <- n_rna_DF[-intrain,]
+
+
+test_train=rbind(table((training$loc)),table((testing$loc)))
+row.names(test_train)=c("training","testing")
+test_train
+barplot(test_train, legend.text = c("testing","training"))
+```
+
+# KNN
+
+Now that that the data is prepared the model can be applied. I selected a k-nearest neighbor algorithm as a model.
+
+```{r}
+
+knnFit=knn3(x=training[,-c(1:3)], # training set
+            y=training$loc, # training set class labels
+            k=5)
+# predictions on the test set
+trainPred=predict(knnFit,training[,-c(1:3)], type='class')
+confusionMatrix(data=training$loc,reference=trainPred)
+```
+
+```{r}
+
+# predictions on the test set
+trainPred=predict(knnFit,testing[,-c(1:3)],type="class")
+confusionMatrix(data=testing$loc,reference=trainPred)
+```
+
+As shown above this kNN model separated the datset into all of the subcellular locations. Since the objective is to predict only the extracellular location a new variable needs to be created to separate the mRNA observations into a extracellular and non-extracellular groups.
+
+```{r}
+n_rna_DF$loc2 = ifelse(n_rna_DF$loc == "Extracellular", paste("exo"), paste("nonexo"))
+n_rna_DF$loc2=as.factor(n_rna_DF$loc2)
+levels(n_rna_DF$loc2)
+
+set.seed(777) # set the random number seed for reproducibility 
+
+# get indices for 70% of the data set
+intrain <- createDataPartition(y =n_rna_DF$loc2, p= 0.7)[[1]]
+
+# seperate test and training sets
+training <- n_rna_DF[intrain,]
+testing <- n_rna_DF[-intrain,]
+
+x=rbind(summary(training$loc2),summary(testing$loc2)) 
+row.names(x)=c("training","testing")
+barplot(x, legend.text = c("training","testing"))
+summary(testing$loc2)
+
+```
+
+The kNN model can now be applied to the new dataset. First train the model and apply to the training dataset.
+
+```{r}
+knnFit=knn3(x=training[,-c(1:3,69)], # training set
+            y=training$loc2, # training set class labels
+            k=5)
+# predictions on the test set
+trainPred=predict(knnFit,training[,-c(1:3,69)],type="class")
+confusionMatrix(data=training$loc2,reference=trainPred)
+```
+
+The ROC curve and AUC can be obtained.
+
+```{r}
+library(pROC)
+trainProbs=predict(knnFit,training[,-c(1:3,69)])
+
+rocCurve1 <- pROC::roc(response = training$loc2,
+                predictor = trainProbs[,1],
+              ## This function assumes that the second
+              ## class is the class of interest, so we
+              ## reverse the labels.
+              levels = rev(levels(testing$loc2)))
+# plot the curve
+plot(rocCurve1, legacy.axes = TRUE, print.auc=TRUE)
+dev.off()
+```
+
+Now the model can be applied to the testing dataset.
+
+```{r}
+# predictions on the test set, return class labels
+testPred=predict(knnFit,testing[,-c(1:3,69)],type="class")
+
+# compare the predicted labels to real labels
+# get different performance metrics
+cm1=confusionMatrix(data=testing$loc2,reference=testPred)
+cm1
+```
+
+```{r}
+testProbs=predict(knnFit,testing[,-c(1:3,69)])
+
+rocCurve2 <- pROC::roc(response = testing$loc2,
+                predictor = testProbs[,1],
+              ## This function assumes that the second
+              ## class is the class of interest, so we
+              ## reverse the labels.
+              levels = rev(levels(testing$loc2)))
+# plot the curve
+plot(rocCurve2, legacy.axes = TRUE, print.auc=TRUE)
+dev.off()
+```
+
+# Conclusion
+
+Comparing the training dataset to the testing dataset, it can be seen the the AUC drops significantly when applied to the test dataset (form train:0.942 to test:0.713). Additionally, the model sees a significant decrease in sensitivity when applied to the test dataset (from train:0.819 to test:0.591). The model does maintain a relatively high specifity (train:0.92 and test:0.91). To generalize the model performs well at predicting what is not a extracellular mRNA, but performs poorly on detecting what is a extracellular mRNA.
+
+While this analyses was somewhat of a success, as I was able to accomplish a basic implementation of machine learning on an independent dataset, it is by no means a high level analyses. Moving forward there are a few components I would like to review further. First, selection of the sample. When comparing the extracellular to the non-extracellular mRNA, there is are significantly fewer extracellular mRNA transcripts. I think that this frequency difference should be taken into account in further analyses. I would also like to explore the feature encoding methods for nucleic acid sequences and to apply other machine learning algorithms to try and obtain stronger identification abilities.
+
+# Bibleography
+
+1.  Akalin, Altuna. 2020. Computational Genomics with R.
+
+2.  Chen, Wei, Tian-Yu Lei, Dian-Chuan Jin, Hao Lin, and Kuo-Chen Chou. 2014. "PseKNC: A Flexible Web Server for Generating Pseudo K-Tuple Nucleotide Composition." Analytical Biochemistry 456 (July): 53--60.
+
+3.  Garg, Anjali, Neelja Singhal, Ravindra Kumar, and Manish Kumar. 2020. "MRNALoc: A Novel Machine-Learning Based in-Silico Tool to Predict MRNA Subcellular Localization." Nucleic Acids Research 48 (W1): W239--43.
+
+4.  Wang, Duolin, Zhaoyue Zhang, Yuexu Jiang, Ziting Mao, Dong Wang, Hao Lin, and Dong Xu. 2021. "DM3Loc: Multi-Label MRNA Subcellular Localization Prediction and Analysis Based on Multi-Head Self-Attention Mechanism." Nucleic Acids Research, January. <https://doi.org/10.1093/nar/gkab016>.
+
+5.  Zhang, Zhao-Yue, Yu-He Yang, Hui Ding, Dong Wang, Wei Chen, and Hao Lin. 2021. "Design Powerful Predictor for MRNA Subcellular Location Prediction in Homo Sapiens." Briefings in Bioinformatics 22 (1): 526--35.
+
+6.  Zhu, Min-Feng, Jie Dong, and Dong-Sheng Cao. 2016. "RDNAse: R Package for Generating Various Numerical Representation Schemes of DNA Sequences." mran.microsoft.com. 2016.
+
+7.  <https://mran.microsoft.com/snapshot/2017-02-28/web/packages/rDNAse/vignettes/rDNAse.pdf>.
+
+Hadley Wickham, Romain François, Lionel Henry and Kirill Müller (2018). dplyr: A Grammar of Data Manipulation. R package version 0.7.6. <https://CRAN.R-project.org/package=dplyr>
+
+[@Wang2021; @Chen2014; @Garg2020; @Zhang2021]
